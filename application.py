@@ -11,14 +11,14 @@ from config import config
 from demo import router
 
 
-app = FastAPI(title="OpenAI Assistant Runner Demo", version="1.0", debug=config.DEBUG)
+application = FastAPI(title="OpenAI Assistant Runner Demo", version="1.0", debug=config.DEBUG)
 
-app.add_middleware(
+application.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-app.include_router(router)
+application.include_router(router)
     

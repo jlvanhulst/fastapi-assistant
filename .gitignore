@@ -1,0 +1,15 @@
+# pycache
+**/__pycache__/
+.DS_Store
+
+*.pyc
+
+.env.development
+.venv/*
+.vscode
+!.vscode/launch.json
+
+# Elastic Beanstalk Files
+.elasticbeanstalk/*
+!.elasticbeanstalk/*.cfg.yml
+!.elasticbeanstalk/*.global.yml
