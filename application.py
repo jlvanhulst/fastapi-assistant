@@ -9,7 +9,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from config import config
 from demo import router
-
+from fastapi.responses import JSONResponse
+from fastapi import APIRouter
 
 application = FastAPI(title="OpenAI Assistant Runner Demo", version="1.0", debug=config.DEBUG)
 
@@ -20,5 +21,13 @@ application.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# this is purely to create a 'ping' health check endpoint feel free to remove.
+root_router = APIRouter()
+@root_router.get("/", response_class=JSONResponse)
+async def root():
+    return {"status": "ok", "message": "Welcome to the OpenAI Assistant Runner Demo"}
+application.include_router(root_router)
+
+# this is the main router for the application
 application.include_router(router)
-    
+# we just provide a simple endpoint to check if the server is running
