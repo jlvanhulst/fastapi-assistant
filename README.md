@@ -1,7 +1,7 @@
 # AsyncOpenAI Assistant with Function Calling in FastAPI
 
 ## Getting Started
-I wrote a fairly extensive example of how to use this on (Medium)(https://medium.com/@meeran03/async-streaming-openai-assistant-api-with-function-calling-in-fastapi-0dfe5935f238)
+I wrote a fairly extensive example of how to use this on (Medium)(https://medium.com/@jlvalorvc/a-scalable-async-openai-assistant-processor-built-with-fastapi-sourcecode-on-github-67fc757e9832)
 
 ### Dependencies
 - Python 3.11 or higher
