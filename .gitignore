@@ -6,8 +6,9 @@
 
 .env.development
 .venv/*
-.vscode
-!.vscode/launch.json
+.vscode/*
+!.vscode/*.json
+
 
 # Elastic Beanstalk Files
 .elasticbeanstalk/*
