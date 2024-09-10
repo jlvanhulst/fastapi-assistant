@@ -29,7 +29,11 @@ Proc
 2. Start Visual Studio Code or Cursor and from the palette select create Environment. Create new venv (select requirements.txt).
 You should see the run and debug option right away because launch.json is configured.
 
-### Running the Application
+You can try out 127.0.0.1:8000 this should just say "Welcome to the OpenAI Assistant runner"
+
+Next try 127.0.0.1/demo/list_assistants
+
+### Running the Application (if not through vscode)
 ```sh
 uvicorn application:application --reload
 ```

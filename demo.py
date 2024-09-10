@@ -41,10 +41,10 @@ async def list_assistants():
     This is a test endpoint that can be used to list all the assistants that this API Key can access
     """
     assistant = Assistant_call()
-    asssitants = assistant.get_assistants()
+    asssitants = await assistant.get_assistants()
     html = "<html><body><h1>Assistants accessible with this API Key</h1>"
-    for a in asssitants:
-        html += f"<p>{a} - {asssitants[a].description} - id: {asssitants[a].id}</p>"
+    async for a in asssitants:
+        html += f"<p>{a.id} - {a.name} - id: {a.model}</p>"
     html += "</body></html>"
     return HTMLResponse(content=html, status_code=200)
 
