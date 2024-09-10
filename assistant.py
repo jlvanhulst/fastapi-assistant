@@ -63,8 +63,18 @@ class Singleton(type):
 
 class file_upload(BaseModel):
     """
-    This is the file upload class which is used to handle the file upload to the OpenAI Assistant API.
-    This is not a an OpenAI object, but a helper class to handle the file upload and attaching to the thread
+    A BaseModel class for handling file uploads to the OpenAI Assistant API.
+    This is SIMILAR but not the same as the OpenAI File Object - mostly used to hold the supported file types and their extensions
+    and the related ability to be used for vision or retrieval
+    
+    Attributes:
+        file_id: Optional[str] - The ID of the uploaded file.
+        filename: str - The name of the file being uploaded.
+
+    Computed Fields:
+        extension: str - The file extension extracted from the filename.
+        vision: bool - Indicates if the file is an image based on its extension.
+        retrieval: bool - Indicates if the file is available for retrieval based on its extension.
     """
     file_id: Optional[str] = None
     filename: str
@@ -98,7 +108,7 @@ class Assistant_call( metaclass=Singleton):
     def __init__(self) -> None:
         self.client = OpenAI()
 
-    async def get_assistant_by_name(self, assistant_name):
+    async def get_assistant_by_name(self, assistant_name) -> str|None:
         '''
         This function gets the assistant id for the given assistant name.
         It returns the assistant id if found, otherwise it returns None.
@@ -118,7 +128,19 @@ class Assistant_call( metaclass=Singleton):
                 return assistant.id
         return None
     
-    async def when_done_str_to_object(self,when_done:str=None):
+    async def get_assistants(self, limit:int=100) -> list[Assistant]:
+        assistants =await self.client.beta.assistants.list(
+        order="asc",
+        limit=limit,
+        )  
+        return assistants
+    async def _when_done_str_to_object(self,when_done:str=None) -> callable:
+        """
+        This function converts the when_done string to an object.
+        If will split the string into module and function name and try to import the function from the module.
+        If the function is not found it will try to get it from the globals().
+        If the function is not found it will return None.
+        """
         if when_done:
             module = None
             func = None
@@ -138,7 +160,36 @@ class Assistant_call( metaclass=Singleton):
         
     async def newthread_and_run(self, assistant_id:str=None, assistant_name:str= None, content:str=None, tools:types.ModuleType=None,metadata:dict={}, files:list=[],when_done:callable=None):
         """
-        It generates the response for the user query.
+        This is the main function to run a thread for an assistant.
+        
+        parameters:
+            assistant_id: The id of the assistant to use.
+            assistant_name: The name of the assistant to use.
+            
+            use assistant_id OR assistant_name - but not both!
+            
+            content: The content of the message to send to the assistant. This is what you want to Assistant to process. 
+            tools: The tools module to use for the tool calls. You pass a module (.py file) that contains the functions you want to use. 
+            Names must match with the function names in the Assistant.
+            
+            metadata: The metadata to store in the thread.
+            The Assistant name is always stored in the metadata as 'assistant_name'
+            
+            files: The list of file_id's to be used by the assistant.
+            these need to be uploaded first. They will be provided as 'vision' if they are images. 
+            Otherwise they will be provided as 'file_search' or 'code_interpreter' depending on the file type.
+            All files will be available for code interpreter and file search.
+            
+            when_done: The function to be called when the assistant is done. This must be a coroutine!
+                       This function will receive the thread_id as an argument and can be used to get the full response.
+                       and do things like send an email or store the results.
+                       If when_done is not provided the function will (await) the result of the assistant call and return the result.
+                       (Because otherwise the result will never be know :) )
+                       if when_done is provided the function will return immediately with a "queued" response that includes the thread_id
+                       (only) this one is useful for api type calls where you want to offload the processing to a background job
+                       
+        returns:
+            The response from the assistant.
         """
         if not assistant_id:
             # looking by assistant name
@@ -172,7 +223,7 @@ class Assistant_call( metaclass=Singleton):
                 role="user"
             )  
         if type(when_done) == str:
-            when_done = await self.when_done_str_to_object(when_done)
+            when_done = await self._when_done_str_to_object(when_done)
         if when_done:
             
             run = await self.client.beta.threads.runs.create(
@@ -180,7 +231,7 @@ class Assistant_call( metaclass=Singleton):
                             assistant_id=assistant_id)
             
             task1 = partial(self.client.beta.threads.runs.poll,run_id=run.id,thread_id=thread.id,poll_interval_ms=1000)
-            task2 = partial(self.process_run,run.id, thread,tools)
+            task2 = partial(self._process_run,run.id, thread,tools)
             task3 = partial(when_done,thread.id)
             asyncio.create_task( run_tasks_sequentially(task1,task2,task3))
             return {"response": f"thread {thread.id} queued for execution", "status_code": 200, "thread_id": thread.id}
@@ -189,7 +240,7 @@ class Assistant_call( metaclass=Singleton):
                             thread_id=thread.id, 
                             assistant_id=assistant_id, 
                             poll_interval_ms=1000)
-            return await self.process_run(run.id, thread,tools)
+            return await self._process_run(run.id, thread,tools)
         return result
 
 
@@ -223,7 +274,7 @@ class Assistant_call( metaclass=Singleton):
             )
         return thread
 
-    async def process_run(self, run_id:str, thread: Thread,tools:types.ModuleType):
+    async def _process_run(self, run_id:str, thread: Thread,tools:types.ModuleType):
         """
         Process run
 
@@ -240,7 +291,7 @@ class Assistant_call( metaclass=Singleton):
             # note this only loops after function calling and possibly next function calling or code interpreter
             if run.status == 'requires_action':
                         
-                tool_outputs = await self.process_tool_calls(
+                tool_outputs = await self._process_tool_calls(
                     tool_calls=run.required_action.submit_tool_outputs.tool_calls,
                     tools=tools
                 )
@@ -260,7 +311,7 @@ class Assistant_call( metaclass=Singleton):
             return {"response": run.last_error, "status_code": 500, "thread_id": thread.id}
         
 
-    async def process_tool_call(self, tool_call:str, tool_outputs: list, extra_args:dict=None, tools:types.ModuleType=None):
+    async def _process_tool_call(self, tool_call:str, tool_outputs: list, extra_args:dict=None, tools:types.ModuleType=None):
         """
         This function processes a single tool call.
         And also handles the exceptions.
@@ -301,20 +352,20 @@ class Assistant_call( metaclass=Singleton):
             "output": result,
         })
 
-    async def process_tool_calls(self, tool_calls:list, extra_args:dict=None, tools:types.ModuleType=None):
+    async def _process_tool_calls(self, tool_calls:list, extra_args:dict=None, tools:types.ModuleType=None):
         """
         This function processes all the tool calls.
         """
         tool_outputs = []
         coroutines = []
         for tool_call in tool_calls:
-            coroutines.append(self.process_tool_call(tool_call=tool_call, tool_outputs=tool_outputs, extra_args=extra_args, tools=tools))
+            coroutines.append(self._process_tool_call(tool_call=tool_call, tool_outputs=tool_outputs, extra_args=extra_args, tools=tools))
         if coroutines:
             await asyncio.gather(*coroutines)
         return tool_outputs
 
 
-    async def uploadfile(self,file=None,file_content=None,filename=None):
+    async def uploadfile(self,file=None,file_content=None,filename=None) -> file_upload:
         ''' Upload a file to openAI either for the Assistant or for the Thread.
         
         parameters:
@@ -339,17 +390,22 @@ class Assistant_call( metaclass=Singleton):
         # Append the file information to self._fileids
         return file_upload(file_id=uploaded_file.id, filename=filename, vision=file_upload_object.vision, retrieval=file_upload_object.retrieval)
     
-    async def get_response(self, thread_id):
+    async def get_response(self, thread_id, remove_annotations:bool=True):
         messages = await self.client.beta.threads.messages.list(thread_id=thread_id)
         message_content = messages.data[0].content[0].text
-
         # Remove annotations
-        annotations = message_content.annotations
-        for annotation in annotations:
-            message_content.value = message_content.value.replace(annotation.text, '')
+        if remove_annotations:
+           message_content = self._remove_annotations(message_content)
 
         response_message = message_content.value
         return response_message
+    
+    def _remove_annotations(self, message_content):
+        annotations = message_content.annotations
+        for annotation in annotations:
+            message_content.value = message_content.value.replace(annotation.text, '')
+        return message_content
+
     async def getlastresponse(self, thread_id:str=None):
         ''' Get the last response from the assistant, returns messages.data[0] 
         '''
@@ -362,7 +418,7 @@ class Assistant_call( metaclass=Singleton):
         messages = await self.client.beta.threads.messages.list( thread_id=thread_id)
         return messages.data
 
-    async def getfullresponse(self, thread_id:str=None) -> str:
+    async def getfullresponse(self, thread_id:str=None, remove_annotations:bool=True) -> str:
         ''' Get the full text response from the assistant (concatenated text type messages)
         traverses the messages.data list and concatenates all text messages
         '''
@@ -372,16 +428,35 @@ class Assistant_call( metaclass=Singleton):
             if m.role == 'assistant':
                 for t in m.content:
                     if t.type == 'text':
-                        res += t.text.value
+                        if remove_annotations:
+                            res += self._remove_annotations(t.text).value
+                        else:
+                            res += t.text.value
+                        
         return res
 
-    async def retrievefile(self,file_id:str):
-        ''' Retrieve the FILE CONTENT of a file from OpenAI
+    async def retrievefile(self,file_id:str) -> bytes:
+        ''' Retrieve the FILE CONTENT of a file from OpenAI 
         '''
         return await self.client.files.content(file_id=file_id)
 
-    async def retrieve_file_object(self,file_id:str):
-        ''' Retrieve the FILE OBJECT of a file from OpenAI
+    async def retrieve_file_object(self,file_id:str) -> file_upload:
+        ''' 
+        Retrieve a File  Upload Object of an uploaded file
+        This is SIMILAR but not the same as the OpenAI File Object
         '''
         file = await self.client.files.retrieve(file_id=file_id)
         return file_upload(file_id=file.id, filename=file.filename, vision=file.purpose == 'vision', retrieval=file.purpose == 'assistants')
+    
+    async def transcribe_audio(self,file=None,file_content=None,file_name=None):
+        '''
+        Transcribe an audio file
+        '''
+        if file_content == None:
+            file_content = await file.read()
+        if file_name == None:
+            file_name = file.filename
+        return await self.client.audio.transcriptions.create(
+            model="whisper-1", 
+            file=(file_name,file_content)
+        )

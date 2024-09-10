@@ -12,6 +12,10 @@ import tools
 from typing import Optional
 from assistant import Assistant_call, file_upload
 import asyncio
+import logging
+
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix='/demo')
 
 class AssistantRequest(BaseModel):
@@ -30,6 +34,20 @@ class AssistantRequest(BaseModel):
     when_done: Optional[str] = None
     metadata: Optional[dict] = None
 
+
+@router.get("/list_assistants", response_class=HTMLResponse)
+async def list_assistants():
+    """
+    This is a test endpoint that can be used to list all the assistants that this API Key can access
+    """
+    assistant = Assistant_call()
+    asssitants = assistant.get_assistants()
+    html = "<html><body><h1>Assistants accessible with this API Key</h1>"
+    for a in asssitants:
+        html += f"<p>{a} - {asssitants[a].description} - id: {asssitants[a].id}</p>"
+    html += "</body></html>"
+    return HTMLResponse(content=html, status_code=200)
+
 @router.get("/joke", response_class=JSONResponse)
 async def assistant_test():
     """
@@ -39,6 +57,8 @@ async def assistant_test():
     ('test' in this case) and the prompt. 
     """
     assistant = Assistant_call()  
+    logger.info("Testing Info")
+
     response = await assistant.newthread_and_run(assistant_name="Joker", content="tell me a joke about sales people")  
     return response
 
@@ -80,7 +100,7 @@ async def file_demo():
     # (or use the /sailesdemo/upload_file endpoint to add files)
     
     # this one is an image of chart with some data and the second file is pdf with a report
-    files = ['file-QCC8zWDAKgBQKgnrN3D97vku','file-j4hL8oRsiEWQjRJQTbQ85v2k']
+    files = ['file-IXd9ZAGil9mYGNgtjuKLfHpP','file-SljsQZ6p9OnFB1l5nhZ0hTQM']
     '''
     we are using the Assistant called "Helpful task manager" that is really use a generic Assistant with vision enabled.
     the assistant has access to the files we uploaded and we provide it two very different files. A pdf report and an image of a chart.
@@ -93,11 +113,22 @@ async def file_demo():
     Make sure to that the function to call is async!
     '''
     
-    result= await assistant.newthread_and_run(assistant_name="Helpful task manager", 
+    result= await assistant.newthread_and_run(assistant_name="Research Assistant", 
                                               content="Create a text version of the data in this image and summarize the attached pdf report", 
                                               files=files,
                                               when_done=run_after)
     return tools.markdown_to_html(result['response'])
+
+@router.post("/transcribe_and_run/{assistant_name}", response_class=JSONResponse)
+async def transcribe_audio(assistant_name:str, audio_file: UploadFile):
+    assistant = Assistant_call()
+    transcription = await assistant.transcribe_audio(file_content=audio_file.file,file_name=audio_file.filename)
+    # now call the assistant with the transcription
+    result= await assistant.newthread_and_run(assistant_name=assistant_name, 
+                                              content=transcription.text, 
+                                              files=[],tools=tools,
+                                              when_done=run_after)
+    return result
 
 
 async def run_after(thread_id:str=None):
