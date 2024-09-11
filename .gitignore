@@ -4,7 +4,9 @@
 
 *.pyc
 
+.env
 .env.development
+*.log
 .venv/*
 .vscode/*
 !.vscode/*.json

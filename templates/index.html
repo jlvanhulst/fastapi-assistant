@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FastAPI Chat Demo</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <style>
+        /* Ensure the body and container take full height */
+        html, body {
+            height: 100%;
+            margin: 0;
+        }
+
+        .container {
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+        }
+
+        /* Make chat-box grow to fill available vertical space */
+        #chat-window {
+            display: flex;
+            flex-direction: column;
+            flex-grow: 1;
+            overflow: hidden;
+        }
+
+        #chat-box {
+            flex-grow: 1;
+            overflow-y: auto;
+        }
+    </style>
+</head>
+
+<body class="bg-gray-100 p-6">
+    <div class="container mx-auto">
+        <h1 class="text-3xl font-bold mb-6">A quick chat demo Assistant</h1>
+        
+        <!-- Dropdown for selecting assistants -->
+        <div class="mb-4">
+            <label for="assistant-select" class="block mb-2 text-sm font-medium text-gray-700">Choose an Assistant:</label>
+            <select id="assistant-select" class="border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm p-2">
+                <option value="">Select an Assistant</option>
+            </select>
+            <button id="new-chat-button" class="px-4 py-2 bg-red-600 text-white rounded-md shadow-sm">New Chat</button>
+
+        </div>
+
+        <div id="chat-window">
+            <div id="chat-box" class="border border-gray-300 p-4 rounded-md mb-4 h-96 overflow-y-auto bg-white"></div>
+            <div class="flex items-center">
+                <textarea type="text" id="message-input"
+                    class="flex-grow border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm mr-2 p-2"
+                    placeholder="Type your message"></textarea>
+                <button id="send-button"
+                    class="ml-2 px-4 py-2 bg-green-600 text-white rounded-md shadow-sm">Send</button>
+            </div>
+            <!-- File upload section -->
+            <div class="mt-4">
+                <input type="file" id="file-input" class="border-gray-300 p-2" />
+                <button id="upload-button" class="ml-2 px-4 py-2 bg-blue-600 text-white rounded-md shadow-sm">Upload</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const chatWindow = document.getElementById('chat-window');
+        const chatBox = document.getElementById('chat-box');
+        const messageInput = document.getElementById('message-input');
+        const sendButton = document.getElementById('send-button');
+        const uploadButton = document.getElementById('upload-button');
+        const fileInput = document.getElementById('file-input');
+        const assistantSelect = document.getElementById('assistant-select');
+        let selectedAssistantId = '';
+
+        let isRecording = false;
+        let recognition;
+
+        sendButton.addEventListener('click', async () => {
+            const message = messageInput.value.trim();
+            if (message) {
+                appendMessage('🗣️', message);
+                messageInput.value = '';
+                await sendMessage(message);
+                messageInput.focus();
+            }
+        });
+
+        uploadButton.addEventListener('click', async () => {
+            const file = fileInput.files[0];
+            if (file) {
+                await uploadFile(file);
+            } else {
+                alert('Please select a file to upload.');
+            }
+        });
+
+        async function uploadFile(file) {
+            const formData = new FormData();
+            formData.append('file', file);
+
+            try {
+                const response = await fetch(`/chat/upload/${chatId}`, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (response.ok) {
+                    appendMessage('📤', `File "${file.name}" uploaded successfully.`);
+                } else {
+                    appendMessage('⚠️', `Failed to upload "${file.name}".`);
+                }
+            } catch (error) {
+                console.error('Error uploading file:', error);
+            }
+        }
+
+        function getJson(s) {
+            s = s.slice(s.search(/[\[{]/));
+            try {
+                return JSON.parse(s);
+            } catch (e) {
+                return JSON.parse(s.slice(0, e.message.match(/position (\d+)/)[1]));
+            }
+        }
+
+        function uuidv4() {
+            return "10000000-1000-4000-8000-100000000000".replace(/[018]/g, c =>
+                (+c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> +c / 4).toString(16)
+            );
+        }
+        const chatId = uuidv4();
+
+        async function sendMessage(message) {
+            if (!selectedAssistantId) {
+                alert('Please select an Assistant first.');
+                return;
+            }
+            
+            try {
+                const response = await fetch(`/chat/thread/${chatId}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        "content": message,
+                        "assistant_id": selectedAssistantId
+                    })
+                });
+
+                if (!response.body) {
+                    throw new Error('ReadableStream not supported');
+                }
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let done = false;
+                const newMessage = appendMessage('🤖', '');
+                const m = newMessage.querySelector('.msg');
+                let msgContents = ''
+                while (!done) {
+                    const { value, done: streamDone } = await reader.read();
+                    done = streamDone;
+                    const data = decoder.decode(value, { stream: true });
+                    const chunks = data.split('\n');
+                    for (chunk in chunks) {
+                        try {
+                            let message = getJson(chunks[chunk]);
+                            message = message?.text?.value;
+                            msgContents += message;
+                            m.innerHTML = marked.parse(msgContents);
+                        } catch (error) { }
+                    }
+                }
+            } catch (error) {
+                console.error('Error sending message:', error);
+            }
+        }
+
+        function appendMessage(sender, message) {
+            const messageElement = document.createElement('div');
+            messageElement.classList.add('mb-2');
+            messageElement.innerHTML = `<strong>${sender}:</strong>\n<span class="msg">${message}</span>`;
+            chatBox.appendChild(messageElement);
+            chatBox.scrollTop = chatBox.scrollHeight;
+            const newMessage = chatBox.children[chatBox.children.length - 1];
+            return newMessage;
+        }
+
+        // Fetch Assistants and populate the dropdown
+        async function fetchAssistants() {
+            try {
+                const response = await axios.get('/chat/get_assistants');
+                const assistants = response.data.data;
+                populateAssistantDropdown(assistants);
+            } catch (error) {
+                console.error('Error fetching assistants:', error);
+            }
+        }
+
+        function populateAssistantDropdown(assistants) {
+            assistants.forEach(assistant => {
+                const option = document.createElement('option');
+                option.value = assistant.assistant_id;
+                option.textContent = assistant.assistant_name;
+                assistantSelect.appendChild(option);
+            });
+        }
+
+        assistantSelect.addEventListener('change', function () {
+            selectedAssistantId = this.value;
+        });
+
+        // Call fetchAssistants on page load to populate the dropdown
+        fetchAssistants();
+
+        // Get reference to the new chat button
+        const newChatButton = document.getElementById('new-chat-button');
+
+        newChatButton.addEventListener('click', () => {
+        // Clear the chat history
+        chatBox.innerHTML = '';
+
+        // Generate a new chat ID
+        const newChatId = uuidv4();
+        // Replace the old chat ID with the new one
+        chatId = newChatId;
+
+});
+    </script>
+</body>
+
+</html>

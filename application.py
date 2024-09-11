@@ -9,6 +9,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from config import config
 from demo import router
+from chat import router as chat_router
 from fastapi.responses import HTMLResponse
 from fastapi import APIRouter
 
@@ -27,7 +28,7 @@ root_router = APIRouter()
 async def root():
     return "Welcome to the OpenAI Assistant Runner Demo"
 application.include_router(root_router)
-
+application.include_router(chat_router)
 # this is the main router for the application
 application.include_router(router)
 # we just provide a simple endpoint to check if the server is running

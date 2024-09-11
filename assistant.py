@@ -33,6 +33,16 @@ import json
 from openai import AsyncOpenAI as OpenAI
 from openai.types.beta import Assistant, Thread
 from openai.types.beta.threads.run import Run
+from openai.types.beta.assistant_stream_event import (
+    ThreadRunRequiresAction,
+    ThreadMessageDelta,
+    ThreadRunFailed,
+    ThreadRunCancelling,
+    ThreadRunCancelled,
+    ThreadRunExpired,
+    ThreadRunStepFailed,
+    ThreadRunStepCancelled,
+)
 import types
 from typing import Optional
 import logging
@@ -61,6 +71,22 @@ class Singleton(type):
             cls._instances[cls] = super(Singleton, cls).__call__(*args, **kwargs)
         return cls._instances[cls]
 
+
+
+async def stream_generator(data):
+    """
+    Generator function to simulate streaming data.
+    """
+    async for message in data:
+        json_data = message
+        if hasattr(message, 'model_dump_json'):
+            json_data = message.model_dump_json()
+        if isinstance(json_data, str) and json_data.startswith('data:'):
+            yield json_data
+        else:
+            yield f"data: {json_data}\n\n"
+            
+            
 class file_upload(BaseModel):
     """
     A BaseModel class for handling file uploads to the OpenAI Assistant API.
@@ -96,6 +122,24 @@ class file_upload(BaseModel):
             'pptx', 'py', 'rb', 'tex', 'txt', 'css', 'js', 'sh', 'ts'
         ]
         return self.extension in retrieval_extensions
+
+class AssistantRequest(BaseModel):
+    """
+    This is the request model for the assistant.
+    
+    content: str is mandatory and is the prompt for the assistant. In general MORE data is better. 
+    file_ids: Optional[list[str]] = None is optional and is a list of file ids to be used by the assistant. 
+    when_done: Optional[str] = None is optional and is a function to be called when the assistant is done. 
+                               this fumction will receive the thread_id as an argument and can be used to get the full response.
+                               and do things like send an email or store the results.
+    
+    """
+    content: str
+    file_ids: Optional[list[str]] = None
+    when_done: Optional[str] = None
+    metadata: Optional[dict] = None
+    assistant_name: Optional[str] = None
+    assistant_id: Optional[str] = None
 
 class Assistant_call( metaclass=Singleton):
     """
@@ -158,9 +202,9 @@ class Assistant_call( metaclass=Singleton):
                 raise ValueError(f"Provided function '{when_done}' is not found or is not a coroutine")
         return func
         
-    async def newthread_and_run(self, assistant_id:str=None, assistant_name:str= None, content:str=None, tools:types.ModuleType=None,metadata:dict={}, files:list=[],when_done:callable=None):
+    async def newthread_and_run(self, assistant_id:str=None, assistant_name:str= None, thread_id:str=None, content:str=None, tools:types.ModuleType=None,metadata:dict={}, files:list=[],when_done:callable=None):
         """
-        This is the main function to run a thread for an assistant.
+        This is the main function to run a non streaming thread for an assistant.
         
         parameters:
             assistant_id: The id of the assistant to use.
@@ -168,6 +212,8 @@ class Assistant_call( metaclass=Singleton):
             
             use assistant_id OR assistant_name - but not both!
             
+            thread_id: The id of the thread to use. If not provided a new thread is created.
+
             content: The content of the message to send to the assistant. This is what you want to Assistant to process. 
             tools: The tools module to use for the tool calls. You pass a module (.py file) that contains the functions you want to use. 
             Names must match with the function names in the Assistant.
@@ -195,7 +241,59 @@ class Assistant_call( metaclass=Singleton):
             # looking by assistant name
             assistant_id = await self.get_assistant_by_name(assistant_name)
             if not assistant_id:
-               return {"response": f"Assistant '{assistant_name}' not found", "status_code": 404}
+                return {"response": f"Assistant '{assistant_name}' not found", "status_code": 404}
+            
+        thread = await self.prep_thread(thread_id=thread_id,assistant_id=assistant_id,files=files, content=content, metadata=metadata,assistant_name=assistant_name)
+            
+        if type(when_done) == str:
+            when_done = await self._when_done_str_to_object(when_done)
+        if when_done:
+            run = await self.client.beta.threads.runs.create(
+                            thread_id=thread.id, 
+                            assistant_id=assistant_id)
+            
+            task1 = partial(self.client.beta.threads.runs.poll,run_id=run.id,thread_id=thread.id,poll_interval_ms=1000)
+            task2 = partial(self._process_run,run_id=run.id, thread=thread,tools=tools)
+            task3 = partial(when_done,thread.id)
+            asyncio.create_task( run_tasks_sequentially(task1,task2,task3))
+            return  {"response": f"thread {thread.id} queued for execution", "status_code": 200, "thread_id": thread.id}
+        else:
+            run = await self.client.beta.threads.runs.create_and_poll(
+                            thread_id=thread.id, 
+                            assistant_id=assistant_id, 
+                            poll_interval_ms=1000)
+            return await self._process_run(run_id=run.id, thread=thread,tools=tools)
+
+
+    async def stream_thread(self, assistant_id:str=None, assistant_name:str= None, thread_id:str=None, content:str=None, tools:types.ModuleType=None,metadata:dict={}, files:list=[],when_done:callable=None):
+        if not assistant_id:
+            # looking by assistant name
+            assistant_id = await self.get_assistant_by_name(assistant_name)
+            if not assistant_id:
+                raise ValueError(f"Assistant {assistant_name} not found")
+        thread = await self.prep_thread(thread_id=thread_id,assistant_id=assistant_id,files=files, content=content, metadata=metadata,assistant_name=assistant_name)
+
+        stream = await self.client.beta.threads.runs.create(
+                            thread_id=thread.id, 
+                            assistant_id=assistant_id, 
+                          stream=True)
+        async for event in stream:
+            async for token in self._process_event(event=event, thread=thread, tools=tools):
+                yield token
+                
+    async def add_vision_files(self, thread_id:str, vision_files:list=[]):
+        for v in vision_files:
+            await self.client.beta.threads.messages.create(
+                thread_id=thread_id,
+                content= [{
+                'type' : "image_file",
+                'image_file' : {"file_id": v.file_id ,'detail':'high'}}],
+                role="user"
+            )  
+                    
+                
+                
+    async def prep_thread(self, thread_id:str=None, assistant_id:str=None, files:list=[], content:str=None, metadata:dict={}, assistant_name:str=None) -> Thread:
         vision_files = []
         attachment_files = []
         if files:
@@ -207,44 +305,17 @@ class Assistant_call( metaclass=Singleton):
                     continue
                 else:
                     attachment_files.append({"file_id": files[i].file_id, "tools": [{"type": "file_search" if files[i].retrieval else "code_interpreter"  }]})     
-        thread = await self.get_thread(assistant_name=assistant_name, metadata=metadata) # create a new thread, store assistant name in meta data thread is created if not exists
+        thread = await self.get_thread(thread_id=thread_id, assistant_name=assistant_name, metadata=metadata) # create a new thread, store assistant name in meta data thread is created if not exists
         await self.client.beta.threads.messages.create(
             thread.id,
             role="user",
             attachments=attachment_files,
             content=content,
         )
-        for v in vision_files:
-            await self.client.beta.threads.messages.create(
-                thread_id=thread.id,
-                content= [{
-                'type' : "image_file",
-                'image_file' : {"file_id": v.file_id ,'detail':'high'}}],
-                role="user"
-            )  
-        if type(when_done) == str:
-            when_done = await self._when_done_str_to_object(when_done)
-        if when_done:
-            
-            run = await self.client.beta.threads.runs.create(
-                            thread_id=thread.id, 
-                            assistant_id=assistant_id)
-            
-            task1 = partial(self.client.beta.threads.runs.poll,run_id=run.id,thread_id=thread.id,poll_interval_ms=1000)
-            task2 = partial(self._process_run,run.id, thread,tools)
-            task3 = partial(when_done,thread.id)
-            asyncio.create_task( run_tasks_sequentially(task1,task2,task3))
-            return {"response": f"thread {thread.id} queued for execution", "status_code": 200, "thread_id": thread.id}
-        else:
-            run = await self.client.beta.threads.runs.create_and_poll(
-                            thread_id=thread.id, 
-                            assistant_id=assistant_id, 
-                            poll_interval_ms=1000)
-            return await self._process_run(run.id, thread,tools)
-        return result
+        await self.add_vision_files(thread_id=thread.id, vision_files=vision_files)
+        return thread
 
-
-    async def get_thread(self, thread_id:str=None, assistant_name:str=None,metadata:dict={}) -> Thread:
+    async def get_thread(self, thread_id:str=None, assistant_name:str=None, metadata:dict={}) -> Thread:
         """
         This function either creates a new thread or retrieves an existing thread. 
         If assistant_name is provided, it will store the assistant name in the metadata of the thread.
@@ -252,14 +323,16 @@ class Assistant_call( metaclass=Singleton):
         
         Args:
             thread_id: The id of the thread to retrieve.
+            
             assistant_name: The name of the assistant to store in the metadata of the thread.
+            assistant_id: The id of the assistant to store in the metadata of the thread.
+            - use assistant_id OR assistant_name - but not both!
+            
             metadata: The metadata to store in the thread.
         Returns:
             The thread object.
         """
         thread = None
-        if metadata==None:
-            metadata = {}
         if thread_id:
             try:
                 thread = await self.client.beta.threads.retrieve(thread_id)
@@ -270,9 +343,10 @@ class Assistant_call( metaclass=Singleton):
             if assistant_name:
                 metadata["assistant_name"] = assistant_name        
             thread = await self.client.beta.threads.create(
-                metadata= metadata,
+                metadata= metadata
             )
         return thread
+
 
     async def _process_run(self, run_id:str, thread: Thread,tools:types.ModuleType):
         """
@@ -310,6 +384,56 @@ class Assistant_call( metaclass=Singleton):
         if run.status in ['expired','failed','cancelled','incomplete']:
             return {"response": run.last_error, "status_code": 500, "thread_id": thread.id}
         
+        
+    async def _process_event(self, event, thread: Thread,tools:types.ModuleType):
+        """
+        Process an event in the thread - for streaming runs
+
+        Args:
+            event: The event to be processed.
+            thread: The thread object.
+            **kwargs: Additional keyword arguments.
+
+        Yields:
+            The processed tokens.
+
+        Raises:
+            Exception: If the run fails.
+        """
+        if isinstance(event, ThreadMessageDelta):
+            data = event.data.delta.content
+            for d in data:
+                yield d
+
+        elif isinstance(event, ThreadRunRequiresAction):
+            run = event.data
+            tool_outputs = await self._process_tool_calls(
+                    tool_calls=run.required_action.submit_tool_outputs.tool_calls,
+                    tools=tools
+                )
+            tool_output_events =  (await self.client.beta.threads.runs.submit_tool_outputs(
+                        thread_id=thread.id,
+                        run_id=run.id,
+                        tool_outputs=tool_outputs,stream=True
+                    ))
+            async for tool_event in tool_output_events:
+                async for token in self._process_event(
+                    tool_event, thread=thread,tools=tools
+                ):
+                    yield token
+
+        elif any(
+            isinstance(event, cls)
+            for cls in [
+                ThreadRunFailed,
+                ThreadRunCancelling,
+                ThreadRunCancelled,
+                ThreadRunExpired,
+                ThreadRunStepFailed,
+                ThreadRunStepCancelled,
+            ]
+        ):
+            raise Exception("Run failed") # pylint: disable=broad-exception-raised 
 
     async def _process_tool_call(self, tool_call:str, tool_outputs: list, extra_args:dict=None, tools:types.ModuleType=None):
         """
@@ -352,7 +476,7 @@ class Assistant_call( metaclass=Singleton):
             "output": result,
         })
 
-    async def _process_tool_calls(self, tool_calls:list, extra_args:dict=None, tools:types.ModuleType=None):
+    async def _process_tool_calls(self, tool_calls:list, extra_args:dict=None, tools:types.ModuleType=None,stream:bool=False):
         """
         This function processes all the tool calls.
         """

@@ -2,7 +2,7 @@
 This file is responsible for routing the incoming requests to the respective endpoints.
 """
 
-from fastapi.responses import JSONResponse, HTMLResponse
+from fastapi.responses import JSONResponse, HTMLResponse,StreamingResponse
 from fastapi import UploadFile
 
 from fastapi import APIRouter
@@ -10,29 +10,18 @@ from pydantic import BaseModel
 
 import tools
 from typing import Optional
-from assistant import Assistant_call, file_upload
+from assistant import Assistant_call, file_upload, AssistantRequest
 import asyncio
 import logging
+from assistant import stream_generator
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix='/demo')
+router    = APIRouter(prefix='/demo')
+assistant = Assistant_call()
 
-class AssistantRequest(BaseModel):
-    """
-    This is the request model for the assistant.
-    
-    content: str is mandatory and is the prompt for the assistant. In general MORE data is better. 
-    file_ids: Optional[list[str]] = None is optional and is a list of file ids to be used by the assistant. 
-    when_done: Optional[str] = None is optional and is a function to be called when the assistant is done. 
-                               this fumction will receive the thread_id as an argument and can be used to get the full response.
-                               and do things like send an email or store the results.
-    
-    """
-    content: str
-    file_ids: Optional[list[str]] = None
-    when_done: Optional[str] = None
-    metadata: Optional[dict] = None
+
+
 
 
 @router.get("/list_assistants", response_class=HTMLResponse)
@@ -40,7 +29,6 @@ async def list_assistants():
     """
     This is a test endpoint that can be used to list all the assistants that this API Key can access
     """
-    assistant = Assistant_call()
     asssitants = await assistant.get_assistants()
     html = "<html><body><h1>Assistants accessible with this API Key</h1>"
     async for a in asssitants:
@@ -56,8 +44,6 @@ async def assistant_test():
     This is the simplest way to 'run' an Assistant. Get the assistant object, provide the name of the Assistant 
     ('test' in this case) and the prompt. 
     """
-    assistant = Assistant_call()  
-    logger.info("Testing Info")
 
     response = await assistant.newthread_and_run(assistant_name="Joker", content="tell me a joke about sales people")  
     return response
@@ -72,7 +58,6 @@ async def run_assistant(assistant_name: str, data: AssistantRequest):
     
     """
     
-    assistant = Assistant_call()
     return await assistant.newthread_and_run(assistant_name=assistant_name, content=data.content, tools=tools,files=data.file_ids,when_done=data.when_done,metadata=data.metadata)
 
 
@@ -85,13 +70,11 @@ async def create_upload_file(file: UploadFile):
     
     returns a file object if successful make sure to store the file_id it will be used for further interactions.
     """
-    assistant = Assistant_call()
     file_upload = await assistant.uploadfile(file_content=file.file,filename=file.filename)
     return file_upload
 
 @router.get("/assistant_demo", response_class=HTMLResponse)
 async def file_demo():
-    assistant = Assistant_call()
     
     # uyou can look up the files in the dashboord once they are uploaded
     # https://platform.openai.com/storage/files/
@@ -121,7 +104,6 @@ async def file_demo():
 
 @router.post("/transcribe_and_run/{assistant_name}", response_class=JSONResponse)
 async def transcribe_audio(assistant_name:str, audio_file: UploadFile):
-    assistant = Assistant_call()
     transcription = await assistant.transcribe_audio(file_content=audio_file.file,file_name=audio_file.filename)
     # now call the assistant with the transcription
     result= await assistant.newthread_and_run(assistant_name=assistant_name, 
@@ -136,7 +118,6 @@ async def run_after(thread_id:str=None):
     Demo function to show how to pick up after a trhead is done - and then use the results to be stored or further processed.
     '''
     print('Completion call')
-    assistant = Assistant_call()
     thread = await assistant.get_thread(thread_id=thread_id)
     print(thread.metadata)
     response = await assistant.getfullresponse(thread_id=thread_id)
