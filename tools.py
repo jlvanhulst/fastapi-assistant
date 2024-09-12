@@ -53,14 +53,18 @@ async def webscrape(plain_json ):
     Returns:
         str: The text content of the webpage. If max_length is provided, the text will be truncated to the specified length.
     '''
-    info = WebScrapeParameters(**plain_json)
+    try:
+        info = WebScrapeParameters(**plain_json)
+    except Exception as e:
+        logging.error(f"Failed to parse JSON: {e}")
+        return "The provided url is not valid"
     header = {'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36'}
     try:
         async with httpx.AsyncClient(follow_redirects=True) as client:
             response = await client.get(str(info.url), headers=header, timeout=5)
     except Exception as e:
         logging.error(f"Failed to fetch URL {info.url}: {e}")
-        return ""
+        return "Error fetching the url "+str(info.url)
     logging.info('succesful webscrape '+str(info.url)+' '+str(response.status_code))
     out = html_to_text(response.text,ignore_links=info.ignore_links)
     if info.max_length:
