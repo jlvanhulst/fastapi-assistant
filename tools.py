@@ -5,6 +5,8 @@ import logging
 import markdown
 from assistant import Assistant_call
 import sys
+from googleapiclient.discovery import build
+import os
 def markdown_to_html(md_text):
     '''
     This helper function is used to convert markdown to html.
@@ -94,3 +96,22 @@ async def company_research(plain_json):
     result = await assistant.newthread_and_run(assistant_name="Company Research Assistant", content="Research this company :"+info.company_name+' '+str(info.website), tools=sys.modules[__name__])
     return str(result['response'])
 
+class google_search_parameters(BaseModel):
+    query: str = Field(..., description="The search query")
+    results: int = Field(3, description="The number of results to return")
+    exactTerms: str = Field(None, description="The exact terms to search for")
+    excludeTerms: str = Field(None, description="The terms to exclude from the search")
+    cx: str = Field(None, description="The custom search engine ID")
+
+async def google_search(plain_json):
+    # foundational search function returns a google search result object
+    info = google_search_parameters(**plain_json)
+    if not info.cx:
+        info.cx = os.environ.get('GOOGLE_SEARCH_CX_ID')
+    service = build("customsearch", "v1",
+                     developerKey=os.environ.get('GOOGLE_SEEARCH_DEVELOPER_KEY'))
+    try:
+        result = service.cse().list( q=info.query,cx=info.cx, num=info.results,hl="en", exactTerms= info.exactTerms, excludeTerms=info.excludeTerms).execute()
+    except:
+        return None
+    return str(result)

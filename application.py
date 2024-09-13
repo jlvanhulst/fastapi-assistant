@@ -29,6 +29,10 @@ async def root():
     return "Welcome to the OpenAI Assistant Runner Demo"
 application.include_router(root_router)
 application.include_router(chat_router)
+
+from twilio_api import router as twilio_router
+application.include_router(twilio_router)
+
 # this is the main router for the application
 application.include_router(router)
 # we just provide a simple endpoint to check if the server is running

@@ -49,3 +49,7 @@ yarl==1.9.4
 
 markdown
 html2text
+
+twilio
+google-api-python-client
+
