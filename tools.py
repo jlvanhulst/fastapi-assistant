@@ -98,7 +98,7 @@ async def company_research(plain_json):
 
 class google_search_parameters(BaseModel):
     query: str = Field(..., description="The search query")
-    results: int = Field(3, description="The number of results to return")
+    results: int = Field(5, description="The number of results to return")
     exactTerms: str = Field(None, description="The exact terms to search for")
     excludeTerms: str = Field(None, description="The terms to exclude from the search")
     cx: str = Field(None, description="The custom search engine ID")
@@ -114,4 +114,7 @@ async def google_search(plain_json):
         result = service.cse().list( q=info.query,cx=info.cx, num=info.results,hl="en", exactTerms= info.exactTerms, excludeTerms=info.excludeTerms).execute()
     except:
         return None
-    return str(result)
+    if result is not None and result.get('items'):
+        return str(result.get('items'))
+    else:
+        return "No results found"

@@ -133,7 +133,7 @@
                 (+c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> +c / 4).toString(16)
             );
         }
-        const chatId = uuidv4();
+        let chatId = uuidv4();
 
         async function sendMessage(message) {
             if (!selectedAssistantId) {
@@ -225,7 +225,7 @@
         chatBox.innerHTML = '';
 
         // Generate a new chat ID
-        const newChatId = uuidv4();
+        let newChatId = uuidv4();
         // Replace the old chat ID with the new one
         chatId = newChatId;
 
