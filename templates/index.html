@@ -33,6 +33,10 @@
             flex-grow: 1;
             overflow-y: auto;
         }
+        a {
+            color: #007bff !important;
+            text-decoration: underline !important;
+        }
     </style>
 </head>
 
@@ -76,7 +80,7 @@
         const fileInput = document.getElementById('file-input');
         const assistantSelect = document.getElementById('assistant-select');
         let selectedAssistantId = '';
-
+        let threadId = null;
         let isRecording = false;
         let recognition;
 
@@ -104,13 +108,18 @@
             formData.append('file', file);
 
             try {
-                const response = await fetch(`/chat/upload/${chatId}`, {
+                const response = await fetch(`/chat/upload/${threadId}`, {
                     method: 'POST',
                     body: formData
                 });
 
                 if (response.ok) {
-                    appendMessage('📤', `File "${file.name}" uploaded successfully.`);
+                    const responseThreadId = response.headers.get('X-Thread-Id');
+                if (responseThreadId) {
+                    threadId = responseThreadId;
+                    localStorage.setItem('threadId', threadId);
+                }
+                    senddMessage('📤', `File "${file.name}" uploaded successfully.`);
                 } else {
                     appendMessage('⚠️', `Failed to upload "${file.name}".`);
                 }
@@ -133,8 +142,6 @@
                 (+c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> +c / 4).toString(16)
             );
         }
-        let chatId = uuidv4();
-
         async function sendMessage(message) {
             if (!selectedAssistantId) {
                 alert('Please select an Assistant first.');
@@ -142,15 +149,20 @@
             }
             
             try {
-                const response = await fetch(`/chat/thread/${chatId}`, {
+                const response = await fetch(`/chat/thread/`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         "content": message,
-                        "assistant_id": selectedAssistantId
+                        "assistant_id": selectedAssistantId,
+                        "thread_id": threadId
                     })
                 });
-
+                const responseThreadId = response.headers.get('X-Thread-Id');
+                if (responseThreadId) {
+                    threadId = responseThreadId;
+                    localStorage.setItem('threadId', threadId);
+                }
                 if (!response.body) {
                     throw new Error('ReadableStream not supported');
                 }
@@ -224,10 +236,8 @@
         // Clear the chat history
         chatBox.innerHTML = '';
 
-        // Generate a new chat ID
-        let newChatId = uuidv4();
-        // Replace the old chat ID with the new one
-        chatId = newChatId;
+        threadId = null;
+
 
 });
     </script>

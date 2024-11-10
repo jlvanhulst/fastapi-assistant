@@ -9,7 +9,7 @@ from pydantic import BaseModel
 
 import tools
 from typing import Optional
-from assistant import Assistant_call, file_upload
+from assistant import Assistant_call, file_upload, run_tasks_sequentially
 import asyncio
 import logging
 from assistant import stream_generator, Assistant_call, AssistantRequest
@@ -20,24 +20,26 @@ logger = logging.getLogger(__name__)
 
 router    = APIRouter(prefix='/chat')
 templates = Jinja2Templates(directory="templates")
-chats = {}
 
-@router.post("/thread/{chat_id}")
-async def get_chat_response(chat_id: str, data: AssistantRequest):
+@router.post("/thread/")
+async def get_chat_response( data: AssistantRequest):
     """
     called from javascript when the user sends a message - if the thread_id is not in the list of chats, a new chat is created
     """
     assistant_id = None
     if data.content == "":
         return ""
-    if chat_id not in chats:
+    thread_id = data.thread_id
+    if thread_id is None:
         thread = await assistant.get_thread()   
-        chats[chat_id] = thread.id
+        thread_id = thread.id
     if data.assistant_id and not data.assistant_id == "":
         assistant_id = data.assistant_id
-    response =assistant.stream_thread(thread_id=chats[chat_id],assistant_id=assistant_id,assistant_name="Chatbot",content=data.content,tools=tools)
-    return StreamingResponse(stream_generator(response))
-
+    response =assistant.stream_thread(thread_id=thread_id,assistant_id=assistant_id,assistant_name="Chatbot",content=data.content,tools=tools)
+    return StreamingResponse(
+        stream_generator(response),
+        headers={"X-Thread-Id": thread_id}
+    )
 @router.get("/", response_class=JSONResponse)
 async def chat_frontend(request: Request):
     """
@@ -45,17 +47,17 @@ async def chat_frontend(request: Request):
     """
     return templates.TemplateResponse("index.html", {"request": request})
 
-@router.post("/upload/{chat_id}",response_class=JSONResponse)
-async def upload_file(chat_id: str, file: UploadFile):
+@router.post("/upload/{thread_id}",response_class=JSONResponse)
+async def upload_file(thread_id: str, file: UploadFile):
     """
     This function uploads a file to the assistant
     """
+    if thread_id == "null":
+        thread = await assistant.get_thread()
+        thread_id = thread.id
     file_upload = await assistant.uploadfile(file_content=file.file,filename=file.filename)
-    if chat_id not in chats:
-        thread = await assistant.get_thread()   
-        chats[chat_id] = thread.id
-    await assistant.prep_thread(thread_id=chats[chat_id],files=[file_upload],content=f"file {file.filename} uploaded")
-    return {"status": "success", "message": "File uploaded successfully"}
+    await assistant.prep_thread(thread_id=thread_id,files=[file_upload],content="file uploaded")
+    return JSONResponse({"status": "success", "message": "File uploaded successfully"},headers={"X-Thread-Id": thread_id})
 
 @router.get("/get_assistants",response_class=JSONResponse)
 async def get_assistants():

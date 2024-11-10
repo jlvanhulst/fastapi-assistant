@@ -140,6 +140,7 @@ class AssistantRequest(BaseModel):
     metadata: Optional[dict] = None
     assistant_name: Optional[str] = None
     assistant_id: Optional[str] = None
+    thread_id: Optional[str] = None
 
 class Assistant_call( metaclass=Singleton):
     """
